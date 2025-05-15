@@ -1,0 +1,8 @@
+*.ctrl
+*.lwp
+*.txt
+/apicache
+/logs
+user-passwords.py
+/.idea
+__pycache__/
