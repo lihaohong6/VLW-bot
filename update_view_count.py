@@ -1,14 +1,14 @@
-from datetime import datetime
 import logging
 import re
 import sys
 from enum import Enum
 from typing import Callable
 
-import requests
-from bs4 import BeautifulSoup
-from pywikibot.pagegenerators import PreloadingGenerator, GeneratorFactory
+from pywikibot.pagegenerators import GeneratorFactory
 from wikitextparser import WikiText, Template, parse
+
+from get_view_count import table, tr, get_bb_views, get_yt_views, get_nn_views
+
 
 def get_logger(name: str = "logger") -> logging.Logger:
     logging.basicConfig(level=logging.INFO,
@@ -23,7 +23,9 @@ def get_logger(name: str = "logger") -> logging.Logger:
     logger.addHandler(handler)
     return logger
 
+
 logger = get_logger()
+
 
 def normalize_template_name(template_name: str) -> str:
     return template_name.lower().strip().replace(" ", "_")
@@ -36,55 +38,17 @@ def get_templates_by_name(wikitext: WikiText, name: str) -> list[Template]:
             result.append(t)
     return result
 
+
 class VideoSite(Enum):
     Bilibili = 'BB'
     YouTube = 'YT'
     NicoNico = 'NN'
 
+
 VideoLinks = dict[VideoSite, list[str]]
 
-table = 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'
-tr = {}
 for index in range(58):
     tr[table[index]] = index
-s = [11, 10, 3, 8, 4, 6]
-xor = 177451812
-add = 8728348608
-
-def av_to_bv(av: str) -> str:
-    x = int(av[2:])
-    x = (x ^ xor) + add
-    r = list('BV1  4 1 7  ')
-    for i in range(6):
-        r[s[i]] = table[x // 58 ** i % 58]
-    return ''.join(r)
-
-def get_bv(vid: str) -> str:
-    search_bv = re.search("BV[0-9a-zA-Z]+", vid, re.IGNORECASE)
-    if search_bv is not None:
-        return search_bv.group(0)
-    search_av = re.search("av[0-9]+", vid, re.IGNORECASE)
-    if search_av is not None:
-        return av_to_bv(search_av.group(0))
-    return vid
-
-def get_bb_views(vid: str) -> int:
-    vid = get_bv(vid)
-    url = f"https://api.bilibili.com/x/web-interface/view?bvid={vid}"
-    response = requests.get(url).json()
-    pic = response['data']['pic']
-    views = response['data']['stat']['view']
-    return views
-
-
-def get_yt_views(vid: str) -> int:
-    url = 'https://www.youtube.com/watch?v=' + vid
-    text = requests.get(url).text
-    match = re.search(r'"simpleText":"([\d,]+) views"', text)
-    if match is None:
-        return 0
-    views = int(match.group(1).replace(',', ''))
-    return views
 
 
 def format_views(views: int) -> str:
@@ -100,64 +64,56 @@ def format_views(views: int) -> str:
     string = string[:keep_digits] + "0" * (num_digits - keep_digits)
     return '{:,}'.format(int(string))
 
-def get_nn_views_old(vid: str) -> int:
-    url = f"https://www.nicovideo.jp/watch/{vid}"
-    result = requests.get(url).text
-    soup = BeautifulSoup(result, "html.parser")
-    views = 0
-    for script in soup.find_all('script'):
-        t: str = script.get_text()
-        index_start = t.find("userInteractionCount")
-        if index_start != -1:
-            index_start += len("userInteractionCount") + 2
-            index_end = t.find("}", index_start)
-            views = int(t[index_start:index_end])
-    return views
+
+def should_update_views(original_views: int, new_views: int) -> bool:
+    assert original_views <= new_views, f"New views smaller than original views: {new_views} < {original_views}"
+    return new_views >= 1000 and new_views >= original_views * 1.5
 
 
-def get_nn_views(vid: str) -> int:
-    result = requests.get(f"https://ext.nicovideo.jp/api/getthumbinfo/{vid}").text
-    match = re.search(r"<view_counter>(\d+)</view_counter>", result)
-    if match:
-        return int(match.group(1))
-    return 0
+# For testing purposes only
+video_view_overrides: dict[str, int] = {}
 
+def override_video_view_count(vid: str, count: int) -> None:
+    video_view_overrides[vid] = count
 
 def process_views(match: re.Match, links: VideoLinks, permissive: bool = False) -> str:
     original = match.group(0)
     original_views = int(match.group("views").replace(",", ""))
 
-    dispatcher: dict[str, tuple[VideoSite, Callable[[str], int]]] = {
-        'BB': (VideoSite.Bilibili, get_bb_views),
-        'YT': (VideoSite.YouTube, get_yt_views),
-        'NN': (VideoSite.NicoNico, get_nn_views)
+    dispatcher: dict[VideoSite, Callable[[str], int]] = {
+        VideoSite.Bilibili: get_bb_views,
+        VideoSite.YouTube: get_yt_views,
+        VideoSite.NicoNico: get_nn_views,
     }
 
-    video_site: VideoSite
     if permissive:
         for link_site, link_list in links.items():
             assert len(link_list) == 1
-            site = link_site.value
+            site = link_site
             break
     else:
-        site = match.group("site")
+        site = VideoSite(match.group("site"))
     if site not in dispatcher:
         return original
-    video_site, func = dispatcher[site]
-    video_ids = links.get(video_site, [])
+    video_ids = links.get(site, [])
     # Multiple uploads to the same website. This is tricky, so we don't want to deal with it.
     if len(video_ids) != 1:
         return original
-    try:
-        views = func(video_ids[0])
-    except Exception as e:
-        return original
+    video_id = video_ids[0]
+    # In a unit test, we want to override the view count of a video
+    if video_id in video_view_overrides:
+        views = video_view_overrides[video_id]
+    else:
+        try:
+            func = dispatcher[site]
+            views = func(video_id)
+        except Exception as e:
+            return original
     if views <= 0:
         return original
-    if views < original_views * 1.5 or views < 1000:
-        return original
-    view_start, view_end = match.span("views")
-    return original[:view_start] + format_views(views) + original[view_end:]
+    if should_update_views(original_views, views):
+        return original.replace(match.group("views"), format_views(views))
+    return original
 
 
 def parse_links(links: str) -> tuple[VideoLinks, int]:
@@ -194,6 +150,26 @@ def parse_links(links: str) -> tuple[VideoLinks, int]:
             continue
     return result, num_links
 
+
+def generate_new_views(links: VideoLinks, num_links: int, views: str):
+    new_views, count = re.subn(r"( |^)(?P<views>[\d,]+)\+? \((?P<site>NN|YT|BB)\)",
+                               lambda m: process_views(m, links, False),
+                               views)
+    # If only one site has a video on it, then we may not see the usual (NN/YT/BB) cue in the play count.
+    # Thus, we perform some checks to see if this is the case. If so, we enter permissive mode and relax
+    # the NN/YT/BB checking to only look for numbers.
+    # There are 3 conditions for permissive mode:
+    # 1. Only 1 link is present
+    # 2. No substitution is made in the previous pass
+    # 3. Only 1 number is present
+    if num_links == 1 and count == 0 and len(re.findall(r"[\d,]+", views)) == 1:
+        new_views, count = re.subn(r"(\s|^)(?P<views>[\d,]+)\+?(\s|$)",
+                                   lambda m: process_views(m, links, True),
+                                   views)
+        assert count == 1
+    return new_views
+
+
 def process_template(template: Template) -> bool:
     view_arg = template.get_arg("#views")
     link_arg = template.get_arg("link")
@@ -202,27 +178,18 @@ def process_template(template: Template) -> bool:
     views = view_arg.value
     links, num_links = parse_links(link_arg.value)
 
-    new_views, count = re.subn(r"( |^)(?P<views>[\d,]+)\+? \((?P<site>NN|YT|BB)\)",
-                               lambda m: process_views(m, links, False),
-                               views)
-
-    if num_links == 1 and count == 0:
-        new_views, count = re.subn(r"(\s|^)(?P<views>[\d,]+)\+?(\s|$)",
-                                   lambda m: process_views(m, links, True),
-                                   views)
-        assert count == 1
+    new_views = generate_new_views(links, num_links, views)
 
     if views == new_views:
         return False
 
     view_arg.value = new_views
-
     return True
 
 
 def main():
     gen = GeneratorFactory()
-    gen.handle_args(['-start:------TRIP_LINE------', "-ns:0"])
+    gen.handle_args(['-start:-Geminate-', "-ns:0"])
     gen = gen.getCombinedGenerator(preload=True)
     for page in gen:
         text = page.text
