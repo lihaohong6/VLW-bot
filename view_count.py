@@ -80,7 +80,7 @@ def get_bb_views(vid: str) -> int:
 def get_yt_views(vid: str) -> int:
     url = 'https://www.youtube.com/watch?v=' + vid
     text = requests.get(url).text
-    match = re.search(r'"simpleText":"(\d+) views"', text)
+    match = re.search(r'"simpleText":"([\d,]+) views"', text)
     if match is None:
         return 0
     views = int(match.group(1).replace(',', ''))
@@ -88,18 +88,19 @@ def get_yt_views(vid: str) -> int:
 
 
 def format_views(views: int) -> str:
+    string = str(views)
     num_digits = len(str(views))
 
     if num_digits >= 6:
-        keep_digits = -3
+        keep_digits = 3
     elif num_digits >= 4:
-        keep_digits = -2
+        keep_digits = 2
     else:
-        keep_digits = -1
-    views = round(views, keep_digits)
-    return '{:,}'.format(views)
+        keep_digits = 1
+    string = string[:keep_digits] + "0" * (num_digits - keep_digits)
+    return '{:,}'.format(int(string))
 
-def get_nn_views(vid: str) -> int:
+def get_nn_views_old(vid: str) -> int:
     url = f"https://www.nicovideo.jp/watch/{vid}"
     result = requests.get(url).text
     soup = BeautifulSoup(result, "html.parser")
@@ -113,7 +114,16 @@ def get_nn_views(vid: str) -> int:
             views = int(t[index_start:index_end])
     return views
 
-def fetch_views(match: re.Match, links: VideoLinks, permissive: bool = False) -> str:
+
+def get_nn_views(vid: str) -> int:
+    result = requests.get(f"https://ext.nicovideo.jp/api/getthumbinfo/{vid}").text
+    match = re.search(r"<view_counter>(\d+)</view_counter>", result)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
+def process_views(match: re.Match, links: VideoLinks, permissive: bool = False) -> str:
     original = match.group(0)
     original_views = int(match.group("views").replace(",", ""))
 
@@ -135,6 +145,7 @@ def fetch_views(match: re.Match, links: VideoLinks, permissive: bool = False) ->
         return original
     video_site, func = dispatcher[site]
     video_ids = links.get(video_site, [])
+    # Multiple uploads to the same website. This is tricky, so we don't want to deal with it.
     if len(video_ids) != 1:
         return original
     try:
@@ -192,12 +203,12 @@ def process_template(template: Template) -> bool:
     links, num_links = parse_links(link_arg.value)
 
     new_views, count = re.subn(r"( |^)(?P<views>[\d,]+)\+? \((?P<site>NN|YT|BB)\)",
-                               lambda m: fetch_views(m, links, False),
+                               lambda m: process_views(m, links, False),
                                views)
 
     if num_links == 1 and count == 0:
         new_views, count = re.subn(r"(\s|^)(?P<views>[\d,]+)\+?(\s|$)",
-                                   lambda m: fetch_views(m, links, True),
+                                   lambda m: process_views(m, links, True),
                                    views)
         assert count == 1
 
@@ -211,7 +222,7 @@ def process_template(template: Template) -> bool:
 
 def main():
     gen = GeneratorFactory()
-    gen.handle_args(['-start:(not)my girl', "-ns:0"])
+    gen.handle_args(['-start:------TRIP_LINE------', "-ns:0"])
     gen = gen.getCombinedGenerator(preload=True)
     for page in gen:
         text = page.text
