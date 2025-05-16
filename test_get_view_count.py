@@ -22,6 +22,8 @@ class Test(TestCase):
         self.assertTrue(600 <= view_count <= 700)
 
     def test_get_bb_views(self):
-        for video_id in ['BV1Gu4y1B7b1']:
+        for video_id, view_min, view_max in [
+            ('BV1Gu4y1B7b1', 120000, 130000),
+            ('BV1ymHXeTEvX', 8000, 10000)]:
             view_count = get_bb_views(video_id)
-            self.assertTrue(120000 <= view_count <= 130000)
+            self.assertTrue(view_min <= view_count <= view_max)

@@ -8,7 +8,7 @@ from typing import Callable
 from pywikibot.pagegenerators import GeneratorFactory
 from wikitextparser import WikiText, Template, parse
 
-from get_view_count import table, tr, get_bb_views, get_yt_views, get_nn_views
+from get_view_count import get_bb_views, get_yt_views, get_nn_views
 
 
 def get_logger(name: str = "logger") -> logging.Logger:
@@ -48,9 +48,6 @@ class VideoSite(Enum):
 
 VideoLinks = dict[VideoSite, list[str]]
 
-for index in range(58):
-    tr[table[index]] = index
-
 
 def format_views(views: int) -> str:
     string = str(views)
@@ -67,7 +64,8 @@ def format_views(views: int) -> str:
 
 
 def should_update_views(original_views: int, new_views: int) -> bool:
-    assert original_views <= new_views, f"New views smaller than original views: {new_views} < {original_views}"
+    if original_views > new_views:
+        raise RuntimeError(f"New views smaller than original views: {new_views} < {original_views}")
     if new_views >= 10000 and new_views >= original_views * 1.5:
         return True
     return new_views >= 1000 and new_views >= original_views * 2
@@ -150,15 +148,15 @@ def parse_links(links: str) -> tuple[VideoLinks, int]:
             link = arg1.name + "=" + arg1.value
         else:
             link = arg1.value.strip()
-        match = re.search(r"nicovideo\.jp/watch/([a-z0-9]+)$", link)
+        match = re.search(r"nicovideo\.jp/watch/([a-z0-9]+)/?$", link)
         if match:
             add(VideoSite.NicoNico, match.group(1))
             continue
-        match = re.search(r"youtube.com/watch\?v=([^ /&]+)$", link)
+        match = re.search(r"youtube.com/watch\?v=([^ /&]+)/?$", link)
         if match:
             add(VideoSite.YouTube, match.group(1))
             continue
-        match = re.search(r"bilibili.com/video/([^ /&]+)$", link)
+        match = re.search(r"bilibili.com/video/([^ /&]+)/?$", link)
         if match:
             add(VideoSite.Bilibili, match.group(1))
             continue
@@ -166,7 +164,7 @@ def parse_links(links: str) -> tuple[VideoLinks, int]:
 
 
 def generate_new_views(links: VideoLinks, num_links: int, views: str) -> str:
-    matches = list(re.finditer(r"( |^)(?P<views>[\d,]+)\+? \((?P<site>NN|YT|BB)\)",
+    matches = list(re.finditer(r"( |^)(?P<views>[\d,]+)\+?\s*\((?P<site>NN|YT|BB)\)",
                                views))
     # If only one site has a video on it, then we may not see the usual (NN/YT/BB) cue in the play count.
     # Thus, we perform some checks to see if this is the case. If so, we enter permissive mode and relax
@@ -219,7 +217,7 @@ def process_template(template: Template) -> bool:
 
 def main():
     gen = GeneratorFactory()
-    gen.handle_args(['-start:.merguez', "-ns:0"])
+    gen.handle_args(['-start:011', "-ns:0"])
     gen = gen.getCombinedGenerator(preload=True)
     for page in gen:
         text = page.text
@@ -229,8 +227,13 @@ def main():
         templates = get_templates_by_name(parsed, "Infobox Song")
         edit_made = False
         for template in templates:
-            res = process_template(template)
-            edit_made = res or edit_made
+            try:
+                res = process_template(template)
+                edit_made = res or edit_made
+            except Exception as e:
+                logging.error(f"Error processing page: {page.title()}")
+                logging.error(e)
+                continue
         if not edit_made:
             continue
         setattr(page, "_bot_may_edit", True)
