@@ -68,7 +68,9 @@ def format_views(views: int) -> str:
 
 def should_update_views(original_views: int, new_views: int) -> bool:
     assert original_views <= new_views, f"New views smaller than original views: {new_views} < {original_views}"
-    return new_views >= 1000 and new_views >= original_views * 1.5
+    if new_views >= 10000 and new_views >= original_views * 1.5:
+        return True
+    return new_views >= 1000 and new_views >= original_views * 2
 
 
 # For testing purposes only
@@ -217,7 +219,7 @@ def process_template(template: Template) -> bool:
 
 def main():
     gen = GeneratorFactory()
-    gen.handle_args(['-start:-Geminate-', "-ns:0"])
+    gen.handle_args(['-start:.merguez', "-ns:0"])
     gen = gen.getCombinedGenerator(preload=True)
     for page in gen:
         text = page.text

@@ -32,7 +32,9 @@ def get_bv(vid: str) -> str:
 def get_bb_views(vid: str) -> int:
     vid = get_bv(vid)
     url = f"https://api.bilibili.com/x/web-interface/view?bvid={vid}"
-    response = requests.get(url).json()
+    # bilibili doesn't like scrapers; use typical browser UA
+    response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36'})
+    response = response.json()
     pic = response['data']['pic']
     views = response['data']['stat']['view']
     return views
@@ -40,7 +42,15 @@ def get_bb_views(vid: str) -> int:
 
 def get_yt_views(vid: str) -> int:
     url = 'https://www.youtube.com/watch?v=' + vid
-    text = requests.get(url).text
+    response = requests.get(url).text
+    soup = BeautifulSoup(response, 'html.parser')
+    for script in soup.find_all("script"):
+        text = script.text
+        if not "ytInitialData" in text:
+            continue
+        break
+    else:
+        return 0
     match = re.search(r'"simpleText":"([\d,]+) views"', text)
     if match is None:
         return 0
