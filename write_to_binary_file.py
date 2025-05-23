@@ -14,8 +14,8 @@ def generate_random_data(n: int) -> list[tuple[str, int]]:
     return [random_video(11) for _ in range(n)]
 
 
-def write_to_sqlite(data: list[tuple[str, int]]) -> None:
-    conn = sqlite3.connect('test.db')
+def write_to_sqlite(db_name: str, data: list[tuple[str, int]]) -> None:
+    conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute(f"""
     CREATE TABLE IF NOT EXISTS videos (
@@ -42,12 +42,13 @@ def restore_views(sig_digits: int | str, num_zeros: int) -> int:
     return int(sig_digits) * (10 ** num_zeros)
 
 
-binary_file = Path('test.bin')
-
 VERSION_NUMBER = 0
 
-def write_to_binary_file(video_id_length: int, data: list[tuple[str, int]]) -> None:
-    file = open(binary_file, 'wb')
+def write_to_binary_file(file_path: Path,
+                         video_id_length: int,
+                         data: list[tuple[str, int]],
+                         relax_video_id_length: bool = False) -> None:
+    file = open(file_path, 'wb')
     result = bytearray()
 
     # version marker
@@ -64,8 +65,13 @@ def write_to_binary_file(video_id_length: int, data: list[tuple[str, int]]) -> N
 
     # write each entry
     for video_id, views in data:
+        if relax_video_id_length:
+            assert len(video_id) <= video_id_length
+            video_id = video_id.rjust(video_id_length, ' ')
+        else:
+            assert len(video_id) == video_id_length
+
         vid_bytes = video_id.encode('ascii')
-        assert len(vid_bytes) == video_id_length
         result.extend(vid_bytes)
 
         sig_digits, num_zeros = truncate_views(views)
@@ -77,7 +83,7 @@ def write_to_binary_file(video_id_length: int, data: list[tuple[str, int]]) -> N
     file.write(result)
     file.close()
 
-def read_binary_file() -> list[tuple[str, int]]:
+def read_binary_file(binary_file: Path) -> list[tuple[str, int]]:
     file = open(binary_file, 'rb')
 
     byte_array = bytearray(file.read())
@@ -101,8 +107,8 @@ def read_binary_file() -> list[tuple[str, int]]:
         result.append((video_id, restore_views(sig_digits, num_zeros)))
     return result
 
-def verify_binary_file(data: list[tuple[str, int]]) -> bool:
-    result = read_binary_file()
+def verify_binary_file(binary_file: Path, data: list[tuple[str, int]]) -> bool:
+    result = read_binary_file(binary_file)
     assert len(result) == len(data)
     for i in range(len(result)):
         expected = data[i]
@@ -114,11 +120,34 @@ def verify_binary_file(data: list[tuple[str, int]]) -> bool:
     print("Binary file verified")
 
 
-def main():
+def test_write():
     data = generate_random_data(100000)
-    write_to_sqlite(data)
-    write_to_binary_file(ID_LENGTH, data)
-    verify_binary_file(data)
+
+    db_file = Path("test.db")
+    write_to_sqlite(str(db_file), data)
+    db_file.unlink()
+
+    binary_file = Path('test.bin')
+    write_to_binary_file(binary_file, ID_LENGTH, data)
+    verify_binary_file(binary_file, data)
+    binary_file.unlink()
+
+binary_file_root = Path("view_counts")
+binary_file_root.mkdir(parents=True, exist_ok=True)
+
+def write_yt_file():
+    file_dir = binary_file_root / "yt.bin"
+    write_to_binary_file(file_dir, 11, [('L0tcMxp8Iy8', 2_345_678)])
+
+
+def write_nn_file():
+    file_dir = binary_file_root / "nn.bin"
+    write_to_binary_file(file_dir, 12, [('sm22001720', 9_999_999)], relax_video_id_length=True)
+
+
+def main():
+    write_yt_file()
+    write_nn_file()
 
 
 if __name__ == '__main__':
